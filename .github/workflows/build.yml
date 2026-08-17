@@ -1,0 +1,85 @@
+name: Build Kin-CRM
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/jpdvm2014/kin-crm-docker
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Check out builder repository
+        uses: actions/checkout@v6
+
+      - name: Check out upstream Kin-CRM
+        uses: actions/checkout@v6
+        with:
+          repository: ock666/Kin-CRM
+          path: kin-crm
+          fetch-depth: 1
+
+      - name: Get upstream commit
+        id: upstream
+        working-directory: kin-crm
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check last built commit
+        id: check
+        run: |
+          if [ -f .upstream-sha ] && [ "$(cat .upstream-sha)" = "${{ steps.upstream.outputs.sha }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Kin-CRM has not changed."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Kin-CRM has changed."
+          fi
+
+      - name: Log in to GHCR
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./kin-crm
+          file: ./kin-crm/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/jpdvm2014/kin-crm-docker:latest
+            ghcr.io/jpdvm2014/kin-crm-docker:sha-${{ steps.upstream.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ock666/Kin-CRM
+            org.opencontainers.image.revision=${{ steps.upstream.outputs.sha }}
+
+      - name: Record upstream commit
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
+
+      - name: Save upstream commit
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .upstream-sha
+          git commit -m "Track Kin-CRM upstream commit"
+          git push
